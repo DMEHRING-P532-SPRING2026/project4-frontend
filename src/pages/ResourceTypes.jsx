@@ -15,6 +15,7 @@ function ResourceTypes() {
     const [name, setName] = useState('')
     const [kind, setKind] = useState('ASSET')
     const [unitOfMeasure, setUnitOfMeasure] = useState('')
+    const [unitCost, setUnitCost] = useState('')
 
     const fetchResourceTypes = async () => {
         try {
@@ -35,6 +36,7 @@ function ResourceTypes() {
         setName(rt.name)
         setKind(rt.kind)
         setUnitOfMeasure(rt.unitOfMeasure)
+        setUnitCost(rt.unitCost != null ? String(rt.unitCost) : '')
         setError('')
     }
 
@@ -43,6 +45,7 @@ function ResourceTypes() {
         setName('')
         setKind('ASSET')
         setUnitOfMeasure('')
+        setUnitCost('')
         setError('')
     }
 
@@ -51,7 +54,12 @@ function ResourceTypes() {
         setLoading(true)
         setError('')
         try {
-            const body = { name, kind, unitOfMeasure }
+            const body = {
+                name,
+                kind,
+                unitOfMeasure,
+                ...(unitCost !== '' ? { unitCost: parseFloat(unitCost) } : {}),
+            }
             const res = editingId
                 ? await api.put(`/api/resource-types/${editingId}`, body)
                 : await api.post('/api/resource-types', body)
@@ -111,7 +119,7 @@ function ResourceTypes() {
                                         </button>
                                     </div>
                                 </div>
-                                <p className="text-neutral-400 text-xs">Unit: {rt.unitOfMeasure}</p>
+                                <p className="text-neutral-400 text-xs">Unit: {rt.unitOfMeasure}{rt.unitCost != null ? ` · $${Number(rt.unitCost).toFixed(2)} / unit` : ''}</p>
                                 {rt.poolAccountId != null && (
                                     <p className="text-neutral-400 text-xs">Pool account: {rt.poolAccountId}</p>
                                 )}
@@ -169,6 +177,18 @@ function ResourceTypes() {
                             onChange={(e) => setUnitOfMeasure(e.target.value)}
                             className="w-full px-3 py-2 rounded-md bg-neutral-700 text-white border border-neutral-500 focus:outline-none focus:border-neutral-300"
                             required
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-white text-sm font-bold mb-1">Unit Cost <span className="text-neutral-400 font-normal">(optional)</span></label>
+                        <input
+                            type="number"
+                            step="any"
+                            min="0"
+                            value={unitCost}
+                            onChange={(e) => setUnitCost(e.target.value)}
+                            placeholder="0.00"
+                            className="w-full px-3 py-2 rounded-md bg-neutral-700 text-white border border-neutral-500 focus:outline-none focus:border-neutral-300"
                         />
                     </div>
                     {error && <p className="text-red-400 text-sm">{error}</p>}

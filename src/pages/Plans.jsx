@@ -2,11 +2,13 @@ import { useState, useEffect } from 'react'
 import api from '../api'
 
 const statusColors = {
-    PROPOSED:    'bg-neutral-600 text-neutral-200',
-    IN_PROGRESS: 'bg-blue-800 text-blue-200',
-    SUSPENDED:   'bg-amber-800 text-amber-200',
-    COMPLETED:   'bg-green-800 text-green-200',
-    ABANDONED:   'bg-red-800 text-red-200',
+    PROPOSED:          'bg-neutral-600 text-neutral-200',
+    PENDING_APPROVAL:  'bg-yellow-800 text-yellow-200',
+    IN_PROGRESS:       'bg-blue-800 text-blue-200',
+    SUSPENDED:         'bg-amber-800 text-amber-200',
+    COMPLETED:         'bg-green-800 text-green-200',
+    ABANDONED:         'bg-red-800 text-red-200',
+    REOPENED:          'bg-cyan-800 text-cyan-200',
 }
 
 const typeColors = {
@@ -15,19 +17,32 @@ const typeColors = {
 }
 
 const actionTransitions = {
-    PROPOSED:    ['implement'],
-    IN_PROGRESS: ['complete', 'suspend'],
-    SUSPENDED:   ['resume'],
-    COMPLETED:   [],
-    ABANDONED:   [],
+    PROPOSED:         ['submitForApproval'],
+    PENDING_APPROVAL: ['approve', 'reject'],
+    IN_PROGRESS:      ['complete', 'suspend'],
+    SUSPENDED:        ['resume'],
+    COMPLETED:        ['reopen'],
+    ABANDONED:        [],
+    REOPENED:         ['complete'],
+}
+
+const transitionEndpoint = {
+    submitForApproval: 'submit-for-approval',
+}
+
+const transitionLabel = {
+    submitForApproval: 'Submit for Approval',
 }
 
 const transitionStyle = {
-    implement: 'bg-blue-600 hover:bg-blue-700 text-white',
-    complete:  'bg-green-700 hover:bg-green-800 text-white',
-    suspend:   'bg-amber-700 hover:bg-amber-800 text-white',
-    resume:    'bg-blue-600 hover:bg-blue-700 text-white',
-    abandon:   'bg-red-700 hover:bg-red-800 text-white',
+    submitForApproval: 'bg-yellow-600 hover:bg-yellow-700 text-white',
+    approve:           'bg-green-600 hover:bg-green-700 text-white',
+    reject:            'bg-orange-600 hover:bg-orange-700 text-white',
+    complete:          'bg-green-700 hover:bg-green-800 text-white',
+    suspend:           'bg-amber-700 hover:bg-amber-800 text-white',
+    resume:            'bg-blue-600 hover:bg-blue-700 text-white',
+    reopen:            'bg-cyan-700 hover:bg-cyan-800 text-white',
+    abandon:           'bg-red-700 hover:bg-red-800 text-white',
 }
 
 function DiffTable({ planned, actual }) {
@@ -126,8 +141,13 @@ function Plans() {
     const [protocols, setProtocols] = useState([])
     const [resourceTypes, setResourceTypes] = useState([])
     const [expandedPlanIds, setExpandedPlanIds] = useState(new Set())
+    const [treeDepth, setTreeDepth] = useState(null) // null = unlimited
+    const [planTrees, setPlanTrees] = useState({})   // { [planId]: plan data from depth-limited fetch }
     const [selectedAction, setSelectedAction] = useState(null)
     const [addingTo, setAddingTo] = useState(null) // { planId, planName, mode: 'sub-plan'|'action' }
+    const [metricsTarget, setMetricsTarget] = useState(null) // { planId }
+    const [metrics, setMetrics] = useState(null)
+    const [metricsLoading, setMetricsLoading] = useState(false)
 
     // add sub-plan form
     const [addPlanName, setAddPlanName] = useState('')
@@ -155,9 +175,6 @@ function Plans() {
     const [actionLoading, setActionLoading] = useState(false)
     const [suspendReason, setSuspendReason] = useState('')
     const [showSuspendForm, setShowSuspendForm] = useState(false)
-    const [showImplementForm, setShowImplementForm] = useState(false)
-    const [implementParty, setImplementParty] = useState('')
-    const [implementLocation, setImplementLocation] = useState('')
     const [actionDetails, setActionDetails] = useState(null)
 
     // allocation form
@@ -165,8 +182,10 @@ function Plans() {
     const [allocQuantity, setAllocQuantity] = useState('')
     const [allocKind, setAllocKind] = useState('GENERAL')
     const [allocAssetId, setAllocAssetId] = useState('')
-    const [allocStart, setAllocStart] = useState('')
-    const [allocEnd, setAllocEnd] = useState('')
+    const [allocStartDate, setAllocStartDate] = useState('')
+    const [allocStartTime, setAllocStartTime] = useState('')
+    const [allocEndDate, setAllocEndDate] = useState('')
+    const [allocEndTime, setAllocEndTime] = useState('')
     const [allocError, setAllocError] = useState('')
     const [allocLoading, setAllocLoading] = useState(false)
 
@@ -193,13 +212,54 @@ function Plans() {
         api.get('/api/resource-types').then(r => r.json()).then(d => setResourceTypes(Array.isArray(d) ? d : [])).catch(() => {})
     }, [])
 
+    const fetchPlanTree = async (planId, depth) => {
+        try {
+            const res = await api.get(`/api/plans/${planId}?depth=${depth}`)
+            if (!res.ok) return
+            const data = await res.json()
+            setPlanTrees(prev => ({ ...prev, [planId]: data }))
+        } catch (err) {
+            console.error('Failed to load plan tree', err)
+        }
+    }
+
     const togglePlan = (id) => {
+        const isExpanding = !expandedPlanIds.has(id)
         setExpandedPlanIds(prev => {
             const next = new Set(prev)
             if (next.has(id)) next.delete(id)
             else next.add(id)
             return next
         })
+        if (isExpanding && treeDepth !== null) fetchPlanTree(id, treeDepth)
+    }
+
+    const handleDepthChange = (depth) => {
+        setTreeDepth(depth)
+        if (depth !== null) {
+            expandedPlanIds.forEach(id => fetchPlanTree(id, depth))
+        }
+    }
+
+    const fetchMetrics = async (planId) => {
+        setMetricsLoading(true)
+        setMetrics(null)
+        try {
+            const res = await api.get(`/api/plans/${planId}/metrics`)
+            if (!res.ok) return
+            setMetrics(await res.json())
+        } catch (err) {
+            console.error('Failed to load metrics', err)
+        } finally {
+            setMetricsLoading(false)
+        }
+    }
+
+    const handleShowMetrics = (plan) => {
+        setSelectedAction(null)
+        setAddingTo(null)
+        setMetricsTarget({ planId: plan.id, planName: plan.name })
+        fetchMetrics(plan.id)
     }
 
     const handleAdd = (node, mode) => {
@@ -269,9 +329,6 @@ function Plans() {
         setAllocError('')
         setShowSuspendForm(false)
         setSuspendReason('')
-        setShowImplementForm(false)
-        setImplementParty('')
-        setImplementLocation('')
         setActionDetails(null)
         fetchActionDetails(node.id)
     }
@@ -313,13 +370,11 @@ function Plans() {
         setActionLoading(true)
         setActionError('')
         try {
-            const res = await api.post(`/api/actions/${selectedAction.id}/${transition}`, body)
+            const endpoint = transitionEndpoint[transition] ?? transition
+            const res = await api.post(`/api/actions/${selectedAction.id}/${endpoint}`, body)
             if (!res.ok) throw new Error(await parseError(res))
             setShowSuspendForm(false)
             setSuspendReason('')
-            setShowImplementForm(false)
-            setImplementParty('')
-            setImplementLocation('')
             await fetchPlans()
             fetchActionDetails(selectedAction.id)
         } catch (err) {
@@ -334,13 +389,19 @@ function Plans() {
         setAllocLoading(true)
         setAllocError('')
         try {
+            const startISO = allocStartDate
+                ? new Date(`${allocStartDate}T${allocStartTime || '00:00'}`).toISOString()
+                : null
+            const endISO = allocEndDate
+                ? new Date(`${allocEndDate}T${allocEndTime || '00:00'}`).toISOString()
+                : null
             const body = {
                 resourceTypeId: parseInt(allocResourceTypeId),
                 quantity: parseFloat(allocQuantity),
                 kind: allocKind,
                 ...(allocKind === 'SPECIFIC' && allocAssetId ? { assetId: allocAssetId } : {}),
-                ...(allocStart ? { timePeriodStart: new Date(allocStart).toISOString() } : {}),
-                ...(allocEnd ? { timePeriodEnd: new Date(allocEnd).toISOString() } : {}),
+                ...(startISO ? { timePeriodStart: startISO } : {}),
+                ...(endISO ? { timePeriodEnd: endISO } : {}),
             }
             const res = await api.post(`/api/actions/${selectedAction.id}/allocations`, body)
             if (!res.ok) throw new Error(await res.text())
@@ -348,8 +409,10 @@ function Plans() {
             setAllocQuantity('')
             setAllocKind('GENERAL')
             setAllocAssetId('')
-            setAllocStart('')
-            setAllocEnd('')
+            setAllocStartDate('')
+            setAllocStartTime('')
+            setAllocEndDate('')
+            setAllocEndTime('')
             fetchActionDetails(selectedAction.id)
         } catch (err) {
             setAllocError(err.message)
@@ -359,15 +422,32 @@ function Plans() {
     }
 
     const validTransitions = actionTransitions[selectedAction?.status] ?? []
-    const actionDone = ['COMPLETED', 'ABANDONED'].includes(selectedAction?.status)
+    const actionDone = ['COMPLETED', 'ABANDONED', 'PENDING_APPROVAL'].includes(selectedAction?.status)
 
     return (
         <div className="grid grid-cols-3 w-full h-full gap-8 px-8 py-8 bg-neutral-800 overflow-hidden">
 
             {/* Plan list */}
             <div className="col-span-2 bg-neutral-600 rounded overflow-hidden flex flex-col min-h-0">
-                <div className="bg-neutral-700 px-4 py-3 border-b border-neutral-500">
+                <div className="bg-neutral-700 px-4 py-3 border-b border-neutral-500 flex items-center justify-between gap-4">
                     <h1 className="text-white font-bold text-xl tracking-wide">Plans</h1>
+                    <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-neutral-400 text-xs">Depth:</span>
+                        <input
+                            type="range"
+                            min="-1"
+                            max="3"
+                            value={treeDepth ?? -1}
+                            onChange={e => {
+                                const v = parseInt(e.target.value)
+                                handleDepthChange(v === -1 ? null : v)
+                            }}
+                            className="w-20 accent-blue-500"
+                        />
+                        <span className="text-neutral-300 text-xs font-bold w-6">
+                            {treeDepth === null ? 'All' : treeDepth}
+                        </span>
+                    </div>
                 </div>
                 <div className="overflow-y-auto flex-1 min-h-0 p-4 flex flex-col gap-2">
                     {plans.length === 0
@@ -387,6 +467,12 @@ function Plans() {
                                         )}
                                         <button onClick={() => handleAdd(plan, 'sub-plan')} className="text-xs text-neutral-400 hover:text-white transition-colors">+ Plan</button>
                                         <button onClick={() => handleAdd(plan, 'action')} className="text-xs text-neutral-400 hover:text-white transition-colors">+ Action</button>
+                                        <button
+                                            onClick={() => handleShowMetrics(plan)}
+                                            className={`text-xs transition-colors ${metricsTarget?.planId === plan.id ? 'text-blue-400' : 'text-neutral-400 hover:text-white'}`}
+                                        >
+                                            Metrics
+                                        </button>
                                         {plan.children?.length > 0 && (
                                             <button
                                                 onClick={() => togglePlan(plan.id)}
@@ -397,9 +483,12 @@ function Plans() {
                                         )}
                                     </div>
                                 </div>
-                                {expandedPlanIds.has(plan.id) && plan.children?.length > 0 && (
+                                {expandedPlanIds.has(plan.id) && (
                                     <div className="mt-2 pl-1">
-                                        {plan.children.map(child => (
+                                        {(treeDepth !== null && planTrees[plan.id]
+                                            ? planTrees[plan.id].children ?? []
+                                            : plan.children ?? []
+                                        ).map(child => (
                                             <PlanNode
                                                 key={child.id}
                                                 node={child}
@@ -509,50 +598,7 @@ function Plans() {
                                 </button>
                             </div>
                             <div className="p-4 flex flex-col gap-2">
-                                {validTransitions.map(t => t === 'implement' ? (
-                                    showImplementForm ? (
-                                        <div key="implement-form" className="flex flex-col gap-2">
-                                            <input
-                                                type="text"
-                                                value={implementParty}
-                                                onChange={(e) => setImplementParty(e.target.value)}
-                                                placeholder="Actual party"
-                                                className="w-full px-3 py-2 rounded-md bg-neutral-700 text-white border border-neutral-500 focus:outline-none focus:border-neutral-300 text-sm"
-                                            />
-                                            <input
-                                                type="text"
-                                                value={implementLocation}
-                                                onChange={(e) => setImplementLocation(e.target.value)}
-                                                placeholder="Actual location"
-                                                className="w-full px-3 py-2 rounded-md bg-neutral-700 text-white border border-neutral-500 focus:outline-none focus:border-neutral-300 text-sm"
-                                            />
-                                            <div className="flex gap-2">
-                                                <button
-                                                    onClick={() => handleTransition('implement', { actualParty: implementParty, actualLocation: implementLocation })}
-                                                    disabled={actionLoading}
-                                                    className="flex-1 font-bold py-2 rounded disabled:opacity-50 bg-blue-600 hover:bg-blue-700 text-white text-sm"
-                                                >
-                                                    Confirm
-                                                </button>
-                                                <button
-                                                    onClick={() => { setShowImplementForm(false); setImplementParty(''); setImplementLocation('') }}
-                                                    className="px-3 py-2 rounded bg-neutral-600 hover:bg-neutral-500 text-white text-sm"
-                                                >
-                                                    Cancel
-                                                </button>
-                                            </div>
-                                        </div>
-                                    ) : (
-                                        <button
-                                            key="implement"
-                                            onClick={() => setShowImplementForm(true)}
-                                            disabled={actionLoading}
-                                            className="w-full font-bold py-2 rounded bg-blue-600 hover:bg-blue-700 text-white"
-                                        >
-                                            Implement
-                                        </button>
-                                    )
-                                ) : t === 'suspend' ? (
+                                {validTransitions.map(t => t === 'suspend' ? (
                                     showSuspendForm ? (
                                         <div key="suspend-form" className="flex flex-col gap-2">
                                             <input
@@ -595,7 +641,7 @@ function Plans() {
                                         disabled={actionLoading}
                                         className={`w-full font-bold py-2 rounded capitalize disabled:opacity-50 ${transitionStyle[t]}`}
                                     >
-                                        {t.charAt(0).toUpperCase() + t.slice(1)}
+                                        {transitionLabel[t] ?? (t.charAt(0).toUpperCase() + t.slice(1))}
                                     </button>
                                 ))}
                                 {!actionDone && (
@@ -719,21 +765,39 @@ function Plans() {
                                     )}
                                     <div>
                                         <label className="block text-white text-sm font-bold mb-1">Start <span className="text-neutral-400 font-normal">(optional)</span></label>
-                                        <input
-                                            type="datetime-local"
-                                            value={allocStart}
-                                            onChange={(e) => setAllocStart(e.target.value)}
-                                            className="w-full px-3 py-2 rounded-md bg-neutral-700 text-white border border-neutral-500 focus:outline-none focus:border-neutral-300"
-                                        />
+                                        <div className="flex gap-2">
+                                            <input
+                                                type="date"
+                                                value={allocStartDate}
+                                                onChange={(e) => setAllocStartDate(e.target.value)}
+                                                className="flex-1 px-3 py-2 rounded-md bg-neutral-700 text-white border border-neutral-500 focus:outline-none focus:border-neutral-300"
+                                            />
+                                            <input
+                                                type="time"
+                                                value={allocStartTime}
+                                                onChange={(e) => setAllocStartTime(e.target.value)}
+                                                disabled={!allocStartDate}
+                                                className="w-28 px-3 py-2 rounded-md bg-neutral-700 text-white border border-neutral-500 focus:outline-none focus:border-neutral-300 disabled:opacity-40"
+                                            />
+                                        </div>
                                     </div>
                                     <div>
                                         <label className="block text-white text-sm font-bold mb-1">End <span className="text-neutral-400 font-normal">(optional)</span></label>
-                                        <input
-                                            type="datetime-local"
-                                            value={allocEnd}
-                                            onChange={(e) => setAllocEnd(e.target.value)}
-                                            className="w-full px-3 py-2 rounded-md bg-neutral-700 text-white border border-neutral-500 focus:outline-none focus:border-neutral-300"
-                                        />
+                                        <div className="flex gap-2">
+                                            <input
+                                                type="date"
+                                                value={allocEndDate}
+                                                onChange={(e) => setAllocEndDate(e.target.value)}
+                                                className="flex-1 px-3 py-2 rounded-md bg-neutral-700 text-white border border-neutral-500 focus:outline-none focus:border-neutral-300"
+                                            />
+                                            <input
+                                                type="time"
+                                                value={allocEndTime}
+                                                onChange={(e) => setAllocEndTime(e.target.value)}
+                                                disabled={!allocEndDate}
+                                                className="w-28 px-3 py-2 rounded-md bg-neutral-700 text-white border border-neutral-500 focus:outline-none focus:border-neutral-300 disabled:opacity-40"
+                                            />
+                                        </div>
                                     </div>
                                     {allocError && <p className="text-red-400 text-sm">{allocError}</p>}
                                     <button
@@ -747,6 +811,81 @@ function Plans() {
                             </div>
                         )}
                     </>
+                ) : metricsTarget ? (
+                    <div className="bg-neutral-600 rounded overflow-hidden shrink-0">
+                        <div className="bg-neutral-700 px-4 py-3 border-b border-neutral-500 flex items-center justify-between">
+                            <div>
+                                <h1 className="text-white font-bold text-xl tracking-wide">{metricsTarget.planName}</h1>
+                                <p className="text-neutral-400 text-xs mt-0.5">Metrics</p>
+                            </div>
+                            <div className="flex gap-3 items-center">
+                                <button
+                                    onClick={() => fetchMetrics(metricsTarget.planId)}
+                                    className="text-xs text-neutral-400 hover:text-white transition-colors"
+                                >
+                                    Refresh
+                                </button>
+                                <button
+                                    onClick={() => { setMetricsTarget(null); setMetrics(null) }}
+                                    className="text-xs text-neutral-400 hover:text-white transition-colors"
+                                >
+                                    ✕
+                                </button>
+                            </div>
+                        </div>
+                        <div className="p-4 flex flex-col gap-4">
+                            {metricsLoading && <p className="text-neutral-400 text-sm">Loading...</p>}
+                            {!metricsLoading && metrics && (
+                                <>
+                                    <div className="flex items-center gap-2">
+                                        <span className={`text-xs font-bold px-2 py-0.5 rounded ${typeColors[metrics.nodeType] ?? 'bg-neutral-600 text-neutral-200'}`}>
+                                            {metrics.nodeType}
+                                        </span>
+                                        <span className="text-white font-bold text-sm">{metrics.nodeName}</span>
+                                    </div>
+
+                                    <div className="flex flex-col gap-1">
+                                        <div className="flex justify-between text-xs">
+                                            <span className="text-neutral-400 font-bold">Completion</span>
+                                            <span className="text-neutral-300">
+                                                {metrics.completedLeaves} / {metrics.totalLeaves} ({(metrics.completionRatio * 100).toFixed(1)}%)
+                                            </span>
+                                        </div>
+                                        <div className="w-full bg-neutral-700 rounded-full h-2">
+                                            <div
+                                                className="bg-green-500 h-2 rounded-full transition-all"
+                                                style={{ width: `${Math.min(metrics.completionRatio * 100, 100)}%` }}
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div className="bg-neutral-700 rounded border border-neutral-500 p-3 flex flex-col gap-0.5">
+                                            <span className="text-neutral-400 text-xs font-bold">Total Cost</span>
+                                            <span className="text-white text-lg font-bold">
+                                                {metrics.totalCost != null ? `$${Number(metrics.totalCost).toLocaleString('en-US', { minimumFractionDigits: 2 })}` : '—'}
+                                            </span>
+                                        </div>
+                                        <div className="bg-neutral-700 rounded border border-neutral-500 p-3 flex flex-col gap-0.5">
+                                            <span className="text-neutral-400 text-xs font-bold">Risk Score</span>
+                                            <span className={`text-lg font-bold ${
+                                                metrics.riskScore === 0 ? 'text-green-400'
+                                                : metrics.riskScore <= 2 ? 'text-amber-400'
+                                                : 'text-red-400'
+                                            }`}>
+                                                {metrics.riskScore ?? '—'}
+                                            </span>
+                                        </div>
+                                    </div>
+
+                                    <div className="bg-neutral-700 rounded border border-neutral-500 p-3">
+                                        <p className="text-neutral-400 text-xs font-bold mb-1">Leaves</p>
+                                        <p className="text-white text-sm">{metrics.totalLeaves} total &mdash; {metrics.completedLeaves} completed</p>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    </div>
                 ) : (
                     /* New plan form */
                     <div className="bg-neutral-600 rounded overflow-hidden">

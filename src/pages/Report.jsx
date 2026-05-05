@@ -2,12 +2,18 @@ import { useState, useEffect } from 'react'
 import api from '../api'
 
 const statusColors = {
-    PROPOSED:    'bg-neutral-600 text-neutral-200',
-    IN_PROGRESS: 'bg-blue-800 text-blue-200',
-    SUSPENDED:   'bg-amber-800 text-amber-200',
-    COMPLETED:   'bg-green-800 text-green-200',
-    ABANDONED:   'bg-red-800 text-red-200',
+    PROPOSED:         'bg-neutral-600 text-neutral-200',
+    PENDING_APPROVAL: 'bg-yellow-800 text-yellow-200',
+    IN_PROGRESS:      'bg-blue-800 text-blue-200',
+    SUSPENDED:        'bg-amber-800 text-amber-200',
+    COMPLETED:        'bg-green-800 text-green-200',
+    ABANDONED:        'bg-red-800 text-red-200',
+    REOPENED:         'bg-cyan-800 text-cyan-200',
 }
+
+const STATUS_FILTERS = [
+    'ALL', 'PROPOSED', 'PENDING_APPROVAL', 'IN_PROGRESS', 'SUSPENDED', 'COMPLETED', 'ABANDONED', 'REOPENED',
+]
 
 const typeColors = {
     PLAN:   'bg-purple-800 text-purple-200',
@@ -19,6 +25,7 @@ function Report() {
     const [selectedPlan, setSelectedPlan] = useState(null)
     const [report, setReport] = useState(null)
     const [loading, setLoading] = useState(false)
+    const [statusFilter, setStatusFilter] = useState('ALL')
 
     useEffect(() => {
         api.get('/api/plans')
@@ -27,12 +34,12 @@ function Report() {
             .catch(err => console.error('Failed to load plans', err))
     }, [])
 
-    const handleSelectPlan = async (plan) => {
-        setSelectedPlan(plan)
+    const fetchReport = async (planId, status) => {
         setReport(null)
         setLoading(true)
         try {
-            const res = await api.get(`/api/plans/${plan.id}/report`)
+            const query = status !== 'ALL' ? `?status=${status}` : ''
+            const res = await api.get(`/api/plans/${planId}/report${query}`)
             if (!res.ok) return
             const data = await res.json()
             setReport(Array.isArray(data) ? data : [])
@@ -41,6 +48,17 @@ function Report() {
         } finally {
             setLoading(false)
         }
+    }
+
+    const handleSelectPlan = (plan) => {
+        setSelectedPlan(plan)
+        setStatusFilter('ALL')
+        fetchReport(plan.id, 'ALL')
+    }
+
+    const handleStatusFilterChange = (status) => {
+        setStatusFilter(status)
+        if (selectedPlan) fetchReport(selectedPlan.id, status)
     }
 
     return (
@@ -76,10 +94,27 @@ function Report() {
 
             {/* Report output */}
             <div className="col-span-2 bg-neutral-600 rounded overflow-hidden flex flex-col min-h-0">
-                <div className="bg-neutral-700 px-4 py-3 border-b border-neutral-500">
+                <div className="bg-neutral-700 px-4 py-3 border-b border-neutral-500 flex flex-col gap-2">
                     <h1 className="text-white font-bold text-xl tracking-wide">
                         {selectedPlan ? `${selectedPlan.name} — Summary Report` : 'Summary Report'}
                     </h1>
+                    {selectedPlan && (
+                        <div className="flex flex-wrap gap-1">
+                            {STATUS_FILTERS.map(s => (
+                                <button
+                                    key={s}
+                                    onClick={() => handleStatusFilterChange(s)}
+                                    className={`text-xs font-bold px-2 py-0.5 rounded transition-colors ${
+                                        statusFilter === s
+                                            ? 'bg-blue-600 text-white'
+                                            : 'bg-neutral-600 text-neutral-300 hover:bg-neutral-500'
+                                    }`}
+                                >
+                                    {s === 'ALL' ? 'All' : s.replace('_', ' ')}
+                                </button>
+                            ))}
+                        </div>
+                    )}
                 </div>
                 <div className="overflow-y-auto flex-1 min-h-0 p-4 flex flex-col gap-2">
                     {!selectedPlan && (
